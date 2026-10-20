@@ -92,6 +92,9 @@ jobs:
         run: python3 tools/progress.py --check
       - name: Hooks behave
         run: tools/test_hooks.sh
+      - name: Contributor tooling (session report, handoff)
+        working-directory: test
+        run: python3 -m unittest test_handoff test_runtime_pr test_tools.SessionReport
 
   session-report:
     if: github.event_name == 'pull_request'
