@@ -166,6 +166,19 @@ class Merge(Fixture):
         self.assertEqual(before, open(f'{self.d}/symbols/functions.csv').read())
 
 
+    def test_malformed_row_writes_nothing(self):
+        # A row with an unquoted comma in its notes has one field too many: a clear error, and
+        # functions.csv is left whole (it was once left half written).
+        with open(f'{self.d}/symbols/functions.csv', 'a') as f:
+            f.write('0x00404000,10,camera_zoom,camera,original,a note, with a comma\n')
+        before = open(f'{self.d}/symbols/functions.csv').read()
+        r = run('merge_functions.py', self.rows(['0x00405000', '10', 'camera_pan', 'camera', 'original', '']),
+                '--root', self.d)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('expected 6 fields', r.stderr)
+        self.assertEqual(before, open(f'{self.d}/symbols/functions.csv').read())
+
+
 class GameData(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
