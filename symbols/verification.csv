@@ -53,6 +53,14 @@ frame_timing_get_monotonic_ms,option-recorded,60,91,91,0,0,3a73b48ae6f6d5e8,2026
 frame_timing_get_monotonic_ms,option-recorded,uncapped,91,91,0,0,3a73b48ae6f6d5e8,2026-10-07
 frame_timing_get_monotonic_ms,option-recorded,wait-sleep,91,91,0,0,3a73b48ae6f6d5e8,2026-10-07
 frame_timing_get_monotonic_ms,option-recorded,wait-spin,91,91,0,0,3a73b48ae6f6d5e8,2026-10-07
+frame_timing_holygrail_until_idle_0200f970,edge,,59,59,0,0,9e64c9d40ab65315,2026-10-30
+frame_timing_holygrail_until_idle_0200f970,edge,60,59,59,0,0,9e64c9d40ab65315,2026-10-30
+frame_timing_holygrail_until_idle_020118f0,edge,,59,59,0,0,9e64c9d40ab65315,2026-10-30
+frame_timing_holygrail_until_idle_020118f0,edge,60,59,59,0,0,9e64c9d40ab65315,2026-10-30
+frame_timing_holygrail_wait_for_dungeon_mode,edge,,59,59,0,0,9e64c9d40ab65315,2026-10-30
+frame_timing_holygrail_wait_for_dungeon_mode,edge,60,59,59,0,0,9e64c9d40ab65315,2026-10-30
+frame_timing_holygrail_wait_for_ritual_mode,edge,,59,59,0,0,9e64c9d40ab65315,2026-10-30
+frame_timing_holygrail_wait_for_ritual_mode,edge,60,59,59,0,0,9e64c9d40ab65315,2026-10-30
 frame_timing_pace_frame,recorded,,585,585,0,0,a3d44cba82dab3c2,2026-10-09
 frame_timing_pace_frame,recorded,30,585,585,0,0,a3d44cba82dab3c2,2026-10-07
 frame_timing_pace_frame,recorded,60,585,585,0,0,a3d44cba82dab3c2,2026-10-07

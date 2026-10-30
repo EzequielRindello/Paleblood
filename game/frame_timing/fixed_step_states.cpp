@@ -12,6 +12,8 @@
 //   request_10: when idle, set request 10, advance, clear the request.
 //   request_7 (2 copies): when idle and in states 2..5, set request 7, advance, clear the
 //     request; otherwise report that it cannot.
+// Four more methods find the gate through SprjHolygrail: the highest of seven event flags picks
+// which of its gates is current; they advance it while busy and report on its mode.
 // And five methods of SprjDungeonGateIns itself: two steps of its step machine
 // (STEP_Init_forChannelLoad, STEP_ModeSwitch) and three handlers of events it registered for,
 // which store whether their request was taken. None of the five returns anything: on every path
@@ -19,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../engine/engine.h"
 #include "frame_time.h"
 #include "runtime/original.h"
 
@@ -96,6 +99,27 @@ struct DungeonGate {
 };
 static_assert(offsetof(DungeonGate, owner) == 0x108 && offsetof(DungeonGate, request_taken) == 0x378 &&
               offsetof(DungeonGate, value_6a0) == 0x6a0);
+
+// SprjHolygrail (the Chalice Dungeons) keeps its gates in an array; seven event flags from 9020
+// say which one is current (the highest flag set; none set selects the last).
+struct Holygrail {
+    uint8_t unknown_0x00[0x8];
+    DungeonGate **gates;
+};
+static_assert(offsetof(Holygrail, gates) == 0x8);
+struct EventFlagMan;
+
+RT_GLOBAL(0x0593e9e8, holygrail_instance, Holygrail *);
+RT_GLOBAL(0x04d3448c, holygrail_name, const char);
+RT_GLOBAL(0x0593b100, event_flag_man_instance, EventFlagMan *);
+RT_GLOBAL(0x04d3b19a, event_flag_man_name, const char);
+// The bits of `count` event flags starting at `first`.
+RT_ORIGINAL(0x017cfd80, event_flag_read_bits, uint32_t(EventFlagMan *, uint32_t first, uint32_t count));
+// A question about the gate's state (it reads FrpgNetMan in some modes); one caller asks it and
+// ignores the answer.
+RT_ORIGINAL(0x01ea5570, gate_state_query, bool(StateOwner *));
+
+constexpr uint32_t gate_flag_first = 9020, gate_flag_count = 7;
 
 // The step machine's step counter; past 27 steps it also builds a debug message.
 RT_ORIGINAL(0x01ec3000, step_machine_count_step, void(DungeonGate *));
@@ -185,6 +209,24 @@ bool take_request_10(StateOwner *owner)
     return take_request(owner, request_10);
 }
 
+// The current gate: index gate_flag_count minus the bit length of the flags (the index stays
+// unsigned, as in the original, so more than seven bits would index far past the array).
+DungeonGate *current_gate()
+{
+    Holygrail *holygrail = engine::require(holygrail_instance, holygrail_name.address());
+    EventFlagMan *flags = engine::require(event_flag_man_instance, event_flag_man_name.address());
+    uint32_t bits = event_flag_read_bits(flags, gate_flag_first, gate_flag_count);
+    uint32_t bit_length = 0;
+    for (; bits != 0; bits >>= 1) bit_length++;
+    const uint32_t index = gate_flag_count - bit_length;
+    return holygrail->gates[index];
+}
+
+// The ritual and dungeon modes come in pairs: local (even) and server (the next, odd). Both match.
+constexpr uint32_t server_variant_bit = 1;
+bool in_ritual_mode(uint32_t state) { return (state & ~server_variant_bit) == mode_local_ritual; }
+bool in_dungeon_mode(uint32_t state) { return (state & ~server_variant_bit) == mode_local_dungeon; }
+
 bool is_gate_event(const GateEvent *event, int32_t id, int32_t wanted)
 {
     return id == wanted && (event->flags & gate_event_required_flags) == gate_event_required_flags;
@@ -259,4 +301,44 @@ extern "C" void bb_frame_timing_dungeon_gate_on_event_3000(DungeonGate *gate, co
     if (!is_gate_event(event, id, gate_event_3000)) return;
     gate->request_taken = take_request_10(&gate->owner);
     gate->value_6a0 = value_6a0_reset;
+}
+
+namespace {
+
+// Advances the owner one fixed step if it is busy; true when it is still busy afterwards.
+bool still_busy_after_step(StateOwner *owner)
+{
+    if (owner->busy == 0) return false;
+    advance(owner);
+    return owner->busy != 0;
+}
+
+// The current gate, advanced while busy: done when it is idle. While it stays busy these two
+// report "not now" (4), where the mode checks below report "still busy" (1): that is what the
+// originals return.
+uint32_t holygrail_until_idle()
+{
+    return still_busy_after_step(&current_gate()->owner) ? result_not_now : result_done;
+}
+
+}  // namespace
+
+extern "C" uint32_t bb_frame_timing_holygrail_until_idle_0200f970() { return holygrail_until_idle(); }
+extern "C" uint32_t bb_frame_timing_holygrail_until_idle_020118f0() { return holygrail_until_idle(); }
+
+// The current gate, advanced while busy; once idle, done in a dungeon mode, not now otherwise.
+extern "C" uint32_t bb_frame_timing_holygrail_wait_for_dungeon_mode()
+{
+    StateOwner *owner = &current_gate()->owner;
+    if (still_busy_after_step(owner)) return result_still_busy;
+    gate_state_query(owner);  // the original asks and ignores the answer
+    return in_dungeon_mode(owner->state) ? result_done : result_not_now;
+}
+
+// The same for the ritual modes (without the question).
+extern "C" uint32_t bb_frame_timing_holygrail_wait_for_ritual_mode()
+{
+    StateOwner *owner = &current_gate()->owner;
+    if (still_busy_after_step(owner)) return result_still_busy;
+    return in_ritual_mode(owner->state) ? result_done : result_not_now;
 }
