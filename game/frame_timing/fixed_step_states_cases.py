@@ -4,13 +4,15 @@
 
 usage: fixed_step_states_cases.py CAPTURES_DIR
 
-Writes CAPTURES_DIR/<function>/edge/*.json for all fourteen methods. The owner's advance method
+Writes CAPTURES_DIR/<function>/edge/*.json for all eighteen methods. The owner's advance method
 (vtable slot +0xd0) is a stand-in game function the case stubs; its descriptor is compared, and
 it leaves the busy count (and for the gate, the state) the case says. Covers idle and busy owners,
 staying busy after the advance, and states around the 2..5 range of request_7 (with wraparound
 values). For SprjDungeonGateIns: every mode and values past them, events with the wrong id or
 missing one of the two flags, and advances that change the state between event 0's two requests;
-the gate's set_step and method_38 and the step counter are stubbed and compared.
+the gate's set_step and method_38 and the step counter are stubbed and compared. For the four
+methods that find the gate through SprjHolygrail: event-flag bits picking each slot (eight
+different gates, so the wrong one shows), every mode, and the state query's answer.
 """
 import json
 import os
@@ -31,6 +33,13 @@ GATE_METHODS = [  # (address, name)
     ('0x01eb9020', 'dungeon_gate_on_event_0'), ('0x01ebb090', 'dungeon_gate_on_event_1000'),
     ('0x01ebf060', 'dungeon_gate_on_event_3000'),
 ]
+HOLYGRAIL_METHODS = [  # (address, name)
+    ('0x01f03210', 'holygrail_wait_for_dungeon_mode'), ('0x01f03680', 'holygrail_wait_for_ritual_mode'),
+    ('0x0200f970', 'holygrail_until_idle_0200f970'), ('0x020118f0', 'holygrail_until_idle_020118f0'),
+]
+HOLYGRAIL, EVENT_FLAG_MAN = '0x0593e9e8', '0x0593b100'
+READ_FLAG_BITS, GATE_STATE_QUERY = '0x017cfd80', '0x01ea5570'
+GATE_SLOTS = 8
 GATE_EVENT_IDS = {'0x01eb9020': 0, '0x01ebb090': 1000, '0x01ebf060': 3000}
 OWNER = 0x108  # the state owner inside the gate
 # Owner fields (offsets from the owner) and gate fields (from the gate), as fixed_step_states.cpp
@@ -95,6 +104,60 @@ def gate_case(address, cid, busy, state, advances=(), event_id=None, flags=GATE_
     return c
 
 
+def holygrail_case(address, cid, bits, gates, advances=(), query=1):
+    """gates: (busy, state) of each of the eight gate slots; the event flags' bits pick one.
+    advances: (busy, state) the advanced owner is left with by each call of its advance method."""
+    c = {'schema': 1, 'address': address, 'id': cid, 'returns': 'i32', 'args': {},
+         'buffers': {'holygrail': {'size': 0x10}, 'gates': {'size': 8 * GATE_SLOTS}, 'flag_man': {'size': 0x10},
+                     'owner_vt': {'size': 216}},
+         'memory': [{'addr': HOLYGRAIL, 'pointer': 'holygrail'}, {'addr': EVENT_FLAG_MAN, 'pointer': 'flag_man'},
+                    {'addr': 'buf:holygrail+8', 'pointer': 'gates'},
+                    {'addr': 'buf:owner_vt+208', 'guest': ADVANCE}],
+         'stubs': [{'address': READ_FLAG_BITS, 'argc': 3, 'argi': [0, 1, 2], 'ret': bits},
+                   {'address': GATE_STATE_QUERY, 'argc': 1, 'argi': [0], 'ret': query}] +
+                  [{'address': ADVANCE, 'argc': 2, 'argi': [0, 1],
+                    'argmem': [{'arg': 1, 'size': 12}, {'arg': 0, 'offset': STATE, 'size': 12}],
+                    'writes': [{'arg': 0, 'offset': STATE, 'bytes': u32(s_)}, {'arg': 0, 'offset': BUSY, 'bytes': u32(b_)}]}
+                   for b_, s_ in advances],
+         'imports': []}
+    for slot, (busy, state) in enumerate(gates):
+        gate = f'gate{slot}'
+        c['buffers'][gate] = {'size': OWNER + 0x270}
+        c['memory'] += [{'addr': f'buf:gates+{8 * slot}', 'pointer': gate},
+                        {'addr': f'buf:{gate}+{OWNER}', 'pointer': 'owner_vt'},
+                        {'addr': f'buf:{gate}+{OWNER + STATE}', 'bytes': u32(state)},
+                        {'addr': f'buf:{gate}+{OWNER + REQUEST}', 'bytes': u32(0x55)},
+                        {'addr': f'buf:{gate}+{OWNER + BUSY}', 'bytes': u32(busy)}]
+    return c
+
+
+def holygrail_cases(address):
+    # Every slot differs, so advancing or reading the wrong gate shows.
+    def slots(chosen, busy, state):
+        return [(busy, state) if i == chosen else (10 + i, 0x40 + i) for i in range(GATE_SLOTS)]
+    out = []
+    # The bits pick slot 7 - bit_length(bits): none set is slot 7, the seventh flag alone slot 0.
+    for bits, slot in ((0, 7), (1, 6), (2, 5), (3, 5), (0x10, 2), (0x40, 0), (0x41, 0), (0x7f, 0)):
+        for busy, state, adv, tag in ((0, 4, (), 'idle_mode_4'), (0, 2, (), 'idle_mode_2'),
+                                      (1, 5, [(0, 5)], 'busy_then_idle_mode_5'),
+                                      (1, 3, [(1, 3)], 'busy_stays_busy')):
+            out.append(holygrail_case(address, f'bits_{bits:x}_{tag}', bits, slots(slot, busy, state), adv))
+    for state in (0, 1, 2, 3, 4, 5, 6, 7, 0xffffffff):
+        out.append(holygrail_case(address, f'idle_state_{state:x}', 1, slots(6, 0, state)))
+    out += [holygrail_case(address, 'busy_negative', 1, slots(6, -1, 4), [(0, 4)])]
+    # The advance leaves the owner busy with a negative count: still busy.
+    out += [holygrail_case(address, f'advance_leaves_busy_{b & 0xffffffff:x}', 1, slots(6, 1, 4), [(b, 4)])
+            for b in (-1, 0x80000000)]
+    # Busy, then idle in each ritual and dungeon mode, and out of one into another (the state is
+    # read again after the advance).
+    for before, after in ((0, 2), (0, 3), (0, 4), (0, 5), (4, 2), (2, 4), (5, 0), (3, 6), (4, 6), (2, 7)):
+        out.append(holygrail_case(address, f'busy_{before}_then_idle_{after}', 1, slots(6, 1, before), [(0, after)]))
+    # The state query's answer is ignored, in every mode pair.
+    out += [holygrail_case(address, f'query_says_no_state_{state}', 1, slots(6, 0, state), query=0)
+            for state in (2, 3, 4, 5, 6)]
+    return out
+
+
 def gate_cases(address):
     out = []
     if address == '0x01eb5390':  # STEP_Init_forChannelLoad
@@ -139,6 +202,13 @@ def main():
         out = os.path.join(sys.argv[1], f'frame_timing_{kind}_{address[2:]}', 'edge')
         os.makedirs(out, exist_ok=True)
         for c in cases_for(address, kind, field):
+            with open(os.path.join(out, f"{c['id']}.json"), 'w') as f:
+                json.dump(c, f, indent=1)
+            n += 1
+    for address, name in HOLYGRAIL_METHODS:
+        out = os.path.join(sys.argv[1], f'frame_timing_{name}', 'edge')
+        os.makedirs(out, exist_ok=True)
+        for c in holygrail_cases(address):
             with open(os.path.join(out, f"{c['id']}.json"), 'w') as f:
                 json.dump(c, f, indent=1)
             n += 1
